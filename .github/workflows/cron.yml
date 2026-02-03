@@ -2,7 +2,7 @@ name: Daily AI News Update
 on:
   schedule:
     - cron: '0 15,0,3,9 * * *' # 한국 시간 00시, 09시, 12시, 18시
-  workflow_dispatch: # 수동 실행 버튼
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,11 +12,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10' # 3.9의 경고를 없애기 위해 3.10으로 업그레이드합니다.
+          python-version: '3.11' # 최신 지원 버전으로 업그레이드
       - name: Install dependencies
-        # 에러 해결을 위해 lxml_html_clean을 추가로 설치합니다.
         run: |
-          pip install requests google-generativeai newspaper4k lxml_html_clean
+          pip install requests newspaper4k lxml_html_clean google-genai
       - name: Run script
         env:
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
