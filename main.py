@@ -34,8 +34,8 @@ def analyze_and_publish():
     
     # 2026년형 모델 호출 방식
     response = client.models.generate_content(
-        model='gemini-2.0-flash', 
-        contents=prompt
+    model='gemini-1.5-flash', 
+    contents=prompt
     )
     
     # 결과 저장
