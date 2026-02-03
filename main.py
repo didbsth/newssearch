@@ -1,17 +1,21 @@
 import os
 import requests
+import json
 from google import genai
 from newspaper import Article
 
-# 1. 설정 및 API 로드
+# 1. 환경 설정
 NAVER_ID = os.environ['NAVER_CLIENT_ID']
 NAVER_SECRET = os.environ['NAVER_CLIENT_SECRET']
-# Client 생성 시 상세 옵션을 추가하여 안정성을 높입니다.
 client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
 
+# 2026년 표준 모델명으로 고정합니다.
+MODEL_NAME = 'gemini-2.5-flash'
+
 def get_news():
-    # 네이버 뉴스 검색 (AI 관련)
-    url = "https://openapi.naver.com/v1/search/news.json?query=AI+OR+인공지능&display=50&sort=sim"
+    # 'AI'와 '인공지능' 키워드로 최신 뉴스 50개를 가져옵니다.
+    query = "AI OR 인공지능"
+    url = f"https://openapi.naver.com/v1/search/news.json?query={query}&display=50&sort=sim"
     headers = {"X-Naver-Client-Id": NAVER_ID, "X-Naver-Client-Secret": NAVER_SECRET}
     res = requests.get(url, headers=headers)
     return res.json().get('items', [])
@@ -19,32 +23,34 @@ def get_news():
 def analyze_and_publish():
     raw_news = get_news()
     
-    # 심리학 및 브랜드 기획 전문가 페르소나 반영
+    # 심리학 연구원 및 브랜드 기획자로서의 페르소나를 주입합니다.
     prompt = f"""
-    당신은 ai 기반 서비스 기획 전문가입니다. 다음 뉴스 목록 중 가치 있는 것을 선별하세요.
-    1. 경제/사회/문화/산업/정치/IT/해외 카테고리로 분류.
-    2. 중복되거나 비슷한 내용은 하나로 합치고 기사 수가 많은 것에 가중치를 둡니다.
+    당신은 ai서비스 브랜드 기획 전문가입니다.
+    제공된 뉴스 목록에서 다음 기준에 따라 '오늘의 인사이트 리포트'를 작성하세요.
     
-    뉴스 목록: {raw_news}
+    1. 카테고리 분류: 경제, 사회, 생활&문화, 산업, 정치, it&과학, 해외
+
+    2. 중복 제거: 비슷한 내용은 하나로 합치고, 기사가 많은 사건일수록 중요하게 다룹니다.
     
-    결과는 HTML 형식의 리포트로 작성해 주세요.
+    데이터: {raw_news}
+    
+    형식: 세련된 디자인의 HTML 코드로 작성하세요. (CSS 포함, head/body 태그 구성)
     """
     
-    # 모델 이름을 'gemini-1.5-flash'로 명시하되, 
-    # v1beta 에러를 피하기 위해 안정적인 호출 방식을 사용합니다.
     try:
+        # 확인된 모델명을 사용하여 콘텐츠 생성
         response = client.models.generate_content(
-            model='gemini-1.5-flash', 
+            model=MODEL_NAME,
             contents=prompt
         )
         
-        # 결과 저장
+        # 생성된 HTML 결과물 저장
         with open("index.html", "w", encoding="utf-8") as f:
             f.write(response.text)
+        print(f"성공: {MODEL_NAME} 모델로 리포트를 생성했습니다.")
             
     except Exception as e:
-        print(f"상세 에러 발생: {e}")
-        # 만약 1.5-flash가 계속 404라면, 더 안정적인 'gemini-1.5-pro'로 시도해볼 수 있습니다.
+        print(f"최종 실행 중 에러 발생: {e}")
         raise e
 
 if __name__ == "__main__":
