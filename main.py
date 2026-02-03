@@ -132,7 +132,3 @@ def analyze_and_publish():
 
 if __name__ == "__main__":
     analyze_and_publish()
-    print(">>> [완료] 구글 인프라 기반 리포트가 성공적으로 생성되었습니다.")
-
-if __name__ == "__main__":
-    analyze_and_publish()
