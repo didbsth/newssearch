@@ -2,80 +2,78 @@ import os
 import requests
 import json
 import re
+import time
 from google import genai
-from google.genai import types # 도구 설정을 위해 추가
+from google.genai import types
 from datetime import datetime, timedelta
 
-# 1. 환경 설정 및 클라이언트 초기화
+# 환경 설정
 NAVER_ID = os.environ['NAVER_CLIENT_ID']
 NAVER_SECRET = os.environ['NAVER_CLIENT_SECRET']
 client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
-MODEL_NAME = 'gemini-2.0-flash' # 정독 능력이 뛰어난 최신 모델 권장
+MODEL_NAME = 'gemini-2.0-flash'
 
 def get_24h_news():
-    """1단계: 네이버 API를 통해 뉴스 목록 수집 (기존 방식 유지)"""
-    print(">>> [1단계] 네이버 뉴스 리스트 수집 중...")
+    """1단계: 24시간 내 뉴스 제목들만 수집"""
+    print(">>> [1단계] 네이버 뉴스 제목 수집 중...")
     query = "AI OR ai OR 인공지능"
     url = f"https://openapi.naver.com/v1/search/news.json?query={query}&display=100&sort=date"
     headers = {"X-Naver-Client-Id": NAVER_ID, "X-Naver-Client-Secret": NAVER_SECRET}
     
     try:
         response = requests.get(url, headers=headers)
-        res_data = response.json().get('items', [])
+        items = response.json().get('items', [])
         now_kst = datetime.utcnow() + timedelta(hours=9)
-        filtered_news = []
+        filtered = []
         
-        for item in res_data:
-            try:
-                pub_date = datetime.strptime(item['pubDate'][:-6], "%a, %d %b %Y %H:%M:%S")
-                if now_kst - pub_date <= timedelta(hours=24):
-                    item['title'] = re.sub(r'<[^>]*>', '', item['title'])
-                    filtered_news.append(item)
-            except: continue
+        for item in items:
+            pub_date = datetime.strptime(item['pubDate'][:-6], "%a, %d %b %Y %H:%M:%S")
+            if now_kst - pub_date <= timedelta(hours=24):
+                # 불필요한 태그 제거 및 제목/링크만 추출
+                clean_title = re.sub(r'<[^>]*>', '', item['title'])
+                filtered.append({"title": clean_title, "link": item['link']})
         
-        print(f">>> {len(filtered_news)}개의 최신 기사 확보 완료.")
-        return filtered_news
-    except Exception as e:
-        print(f"!!! 뉴스 수집 에러: {e}")
-        return []
+        print(f">>> {len(filtered)}개의 후보 제목 확보.")
+        return filtered
+    except: return []
 
 def analyze_and_publish():
     news_pool = get_24h_news()
     if not news_pool: return
 
-    # [2단계] 분류 (Gemini에게 목록 전달)
-    print(">>> [2단계] 카테고리 분류 중...")
-    classification_prompt = f"다음 뉴스 목록을 분석하여 경제, 사회, 생활&문화, 산업, 정치, it&과학, 해외 카테고리로 분류하고 JSON 형식으로만 답하세요: {news_pool}"
+    # 2~3단계: 중복 제거 및 카테고리 분류 통합 호출 (할당량 절약)
+    print(">>> [2-3단계] AI 중복 제거 및 카테고리 분류 중...")
+    process_prompt = f"""
+    아래 뉴스 제목 리스트를 분석해:
+    1. 동일한 사건을 다루는 중복 제목은 하나만 남기고 모두 제거해.
+    2. 남은 고유 기사들을 [경제, 사회, 생활&문화, 산업, 정치, it&과학, 해외] 카테고리로 분류해.
+    3. 결과는 반드시 마크다운 없이 순수 JSON으로만 반환해.
+    데이터: {news_pool}
+    """
     
-    res = client.models.generate_content(model=MODEL_NAME, contents=classification_prompt)
     try:
-        json_match = re.search(r'\{.*\}', res.text, re.DOTALL)
-        category_map = json.loads(json_match.group())
-    except: return
+        res = client.models.generate_content(model=MODEL_NAME, contents=process_prompt)
+        json_text = re.search(r'\{.*\}', res.text, re.DOTALL).group()
+        category_map = json.loads(json_text)
+    except:
+        print("!!! 중복 제거 및 분류 실패")
+        return
 
     final_html_body = ""
 
-    # [3단계] 구글 인프라를 이용한 기사 전문 정독 및 분석
+    # 4단계: 개별 기사 정독 및 분석
     for category, items in category_map.items():
-        print(f">>> [{category}] 분야 기사 정독 시작...")
+        print(f">>> [{category}] 분야 분석 시작...")
         unique_articles = []
         
-        for item in items[:5]: # 각 분야 상위 5개 분석
+        for item in items[:5]: # 할당량 보호를 위해 카테고리당 최대 5개
             link = item.get('link')
-            
-            # [핵심] Gemini에게 구글 검색 도구를 사용하여 해당 링크를 정독하라고 지시합니다.
-            # 이 명령은 사이트의 방어벽을 우회하여 본문 전체를 파악하게 합니다.
-            reading_prompt = f"""
-            다음 뉴스 링크에 접속하여 기사의 '전체 본문'을 정독한 후 내용을 요약해 주세요.
-            링크: {link}
-            
-            요구사항:
-            1. 웹사이트 메뉴나 광고 정보는 무시하고 기사 내용에만 집중하세요.
-            2. 기사의 핵심 내용을 3~4문장으로 정리하세요.
-            """
+            reading_prompt = f"다음 링크의 웹페이지 전체 소스에 접근하여 본문을 정독하고 3문장으로 요약해: {link}"
             
             try:
-                # google_search 도구를 활성화하여 호출
+                # 429 에러 방지를 위한 호출 전 대기 (RPM 제한 준수)
+                time.sleep(4) 
+                
                 response = client.models.generate_content(
                     model=MODEL_NAME,
                     contents=reading_prompt,
@@ -84,30 +82,28 @@ def analyze_and_publish():
                     )
                 )
                 
-                analysis_text = response.text
                 unique_articles.append({
                     "title": item.get('title'),
                     "link": link,
-                    "summary": analysis_text.replace('\n', '<br>')
+                    "summary": response.text.strip().replace('\n', '<br>')
                 })
-                print(f"   + 정독 완료: {item.get('title')[:15]}...")
+                print(f"   + 분석 완료: {item.get('title')[:15]}...")
             except Exception as e:
-                print(f"   - 정독 실패 ({item.get('title')[:10]}): {e}")
+                print(f"   - 정독 실패: {e}")
                 continue
 
         if unique_articles:
-            final_html_body += f"<section><h2>[{category}] 주요 뉴스</h2><ul>"
+            final_html_body += f"<section><h2>[{category}]</h2><ul>"
             for a in unique_articles:
                 final_html_body += f"<li><a href='{a['link']}' target='_blank'><strong>{a['title']}</strong></a><p>{a['summary']}</p></li>"
             final_html_body += "</ul></section><hr>"
 
-    # 4단계: HTML 생성 및 저장 (기존 방식 유지)
+    # HTML 저장 로직 동일
     update_time = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d %H:%M')
-    html_template = f"<html><body style='font-family:sans-serif; padding:40px;'><div>{update_time} KST</div><h1>🤖 AI 뉴스 정독 리포트</h1>{final_html_body}</body></html>"
-    
+    html_template = f"<html><body style='font-family:sans-serif; padding:40px;'><div>{update_time} KST</div><h1>🤖 AI 정독 리포트</h1>{final_html_body}</body></html>"
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(html_template)
-    print(">>> [완료] 구글 인프라 기반 리포트 생성 성공.")
+    print(">>> [완료] 리포트 생성 성공.")
 
 if __name__ == "__main__":
     analyze_and_publish()
